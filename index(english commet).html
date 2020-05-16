@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>excel-to-json</title>
+    <script src="./xlsx.full.min.js" defer></script>
+    <style>
+      .json {
+        padding: .5rem 1rem;
+        outline: 1px solid #444;
+      }
+    </style>
+  </head>
+  <body>
+    <input type="file" id="fileUpload" accept=".xls,.xlsx" />
+    <button id="btn" type="button">convert</button>
+    <script>
+      // only supports one "Array Property" and its items must have aleast two property
+      let selectedFile;
+      document.getElementById("fileUpload").addEventListener("change", (e) => {
+        selectedFile = e.target.files[0];
+      });
+      document.getElementById("btn").addEventListener("click", (e) => {
+        if (selectedFile) {
+          console.log("file selected!");
+          const fileReader = new FileReader();
+
+          fileReader.onload = (e) => {
+            const data = e.target.result;
+
+            const workbook = XLSX.read(data, {
+              type: "binary",
+            });
+            workbook.SheetNames.forEach((currentSheet) => {
+              let result = [];
+              const sheet = workbook.Sheets[currentSheet];
+              // convert to csv
+              // example:
+              // original:
+              // "pid,color,qty\n
+              // ps001,red,10\n
+              // ps002,black,12
+              // "
+              // output:
+              // [
+              //   ["pid","color","qty"],
+              //   ["ps001","red","10"],
+              //   ["ps002","red","12"]
+              // ]
+              let csvArray = XLSX.utils
+                .sheet_to_csv(sheet)
+                .split("\n")
+                .map((row) => {
+                  return row.split(",");
+                });
+              // store cols for later use
+              let cols = {};
+              // check if there is an array property
+              let hasArray = false;
+              // begin from row 0 
+              // store the property name and index
+              // if there are merged cells skip
+              csvArray[0].forEach((cell, index) => {
+                if (!cell) return;
+                cols[cell] = { index };
+              });
+              // csvArray: [
+              //   ["pid","color",""],
+              //   ["","name","qty"]
+              //   ...
+              // ]
+              // cols: {
+              //   pid: {
+              //     index: 0,
+              //   },
+              //   colors: {
+              //     index: 1,
+              //     props: {
+              //       name: 1,
+              //       qty: 2,
+              //     },
+              //   },
+              // }
+              sheet["!merges"].forEach((merge) => {
+                let { s, e } = merge;
+                // 如果是在第0行而且 开始的r(行) 等于结束的行
+                // if the merged cell is on row 0 and the start col == end col
+                // it means this is a array property
+                if (s.r == 0 && s.r == e.r) {
+                  hasArray = true;
+                  // calculate the numbers of property
+                  let arrayObjPropsQtyLeft = e.c - s.c + 1;
+                  for (const key in cols) {
+                    // if the index == start col, then its array property
+                    if (cols[key].index == s.c) {
+                      cols[key].props = {};
+
+                      while (arrayObjPropsQtyLeft > 0) {
+                        arrayObjPropsQtyLeft -= 1;
+
+                        let position = e.c - arrayObjPropsQtyLeft;
+
+                        cols[key].props[csvArray[1][position]] = {
+                          col: position,
+                        };
+                      }
+                    }
+                  }
+                }
+              });
+
+              if (hasArray) {
+                sheet["!merges"].forEach((merge) => {
+                  let { s, e } = merge;
+                  // start from row 2
+                  if (s.r > 1) {
+
+                    let row = {};
+                    // for every col
+                    for (const key in cols) {
+                      const props = cols[key].props;
+                      // if the property has props, then its a array property
+                      if (props) {
+                        row[key] = [];
+                        // caculate array length
+                        let ArrayLength = e.r - s.r + 1;
+                        
+                        while (ArrayLength > 0) {
+                          ArrayLength -= 1;
+                          
+                          let arrayObj = {};
+
+                          for (const k in props) {
+                            // obj[k] = csvArray["position in csvArray"]
+                            arrayObj[k] =
+                              csvArray[e.r - ArrayLength][props[k].col];
+                          }
+
+                          row[key].push(arrayObj);
+                        }
+
+                      } else {
+
+                        row[key] = csvArray[s.r][s.c];
+                      }
+                    }
+                    result.push(row);
+                  }
+                });
+              } else {
+                csvArray.forEach((row, index) => {
+                  if (index >= 1) {
+
+                    let rowData = {};
+                    for (const key in cols) {
+                      
+                      rowData[key] = csvArray[index][cols[key].index];
+                    }
+                    result.push(rowData);
+                  }
+                });
+              }
+              
+              const divEL = document.createElement("div");
+              divEL.classList.add("json");
+              document.body.appendChild(divEL);
+
+              const h2El = document.createElement("h2");
+              h2El.innerText = currentSheet;
+              divEL.appendChild(h2El);
+
+              const preEl = document.createElement("pre");
+              preEl.innerHTML = JSON.stringify(result, null, 2);
+              divEL.appendChild(preEl);
+
+              console.log(result);
+            });
+          };
+          fileReader.readAsBinaryString(selectedFile);
+        }
+      });
+    </script>
+  </body>
+</html>

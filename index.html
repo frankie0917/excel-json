@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>excel-to-json</title>
+    <script src="./xlsx.full.min.js" defer></script>
+    <style>
+      .json {
+        padding: .5rem 1rem;
+        outline: 1px solid #444;
+      }
+    </style>
+  </head>
+  <body>
+    <input type="file" id="fileUpload" accept=".xls,.xlsx" />
+    <button id="btn" type="button">convert</button>
+    <script>
+      // 现在只支持一个列表属性,且列表属性必须有至少两个项
+      let selectedFile;
+      // 获取excel文件并放入 selectedFile 变量
+      document.getElementById("fileUpload").addEventListener("change", (e) => {
+        selectedFile = e.target.files[0];
+      });
+      // 当按下按钮时开始转换
+      document.getElementById("btn").addEventListener("click", (e) => {
+        // 检查是否有文件
+        if (selectedFile) {
+          console.log("file selected!");
+          const fileReader = new FileReader();
+
+          fileReader.onload = (e) => {
+            const data = e.target.result;
+
+            const workbook = XLSX.read(data, {
+              type: "binary",
+            });
+            // 每个sheet进行转换
+            workbook.SheetNames.forEach((currentSheet) => {
+              let result = [];
+              const sheet = workbook.Sheets[currentSheet];
+              console.log(sheet)
+              // 转换成csv 后以\n 分开 再每一个row里面再以","分开
+              // example:
+              // original:
+              // "pid,color,qty\n
+              // ps001,red,10\n
+              // ps002,black,12
+              // "
+              // output:
+              // [
+              //   ["pid","color","qty"],
+              //   ["ps001","red","10"],
+              //   ["ps002","red","12"]
+              // ]
+              let csvArray = XLSX.utils
+                .sheet_to_csv(sheet)
+                .split("\n")
+                .map((row) => {
+                  return row.split(",");
+                });
+              // 先计算有多少 属性/列
+              let cols = {};
+              // 记录属性中有没有 列表/Array
+              let hasArray = false;
+              // 默认从第0行开始记录行的名称及index
+              // 如果遇到合并行的话,会出现"",便跳过
+              csvArray[0].forEach((cell, index) => {
+                if (!cell) return;
+                cols[cell] = { index };
+              });
+              // 获取所有合并的单元格
+              // 如果有列表属性的话,效果如下:
+              // csvArray: [
+              //   ["pid","color",""],
+              //   ["","name","qty"]
+              //   ...
+              // ]
+              // cols: {
+              //   pid: {
+              //     index: 0,
+              //   },
+              //   colors: {
+              //     index: 1,
+              //     props: {
+              //       name: 1,
+              //       qty: 2,
+              //     },
+              //   },
+              // }
+              sheet["!merges"].forEach((merge) => {
+                // deconstruct 出 s(开始),e(结束)的单元格
+                let { s, e } = merge;
+                // 如果是在第0行而且 开始的r(行) 等于结束的行
+                // 开始和结束的r相同就表示这是一个行里面的合并,
+                // 代表这是一个列表属性
+                if (s.r == 0 && s.r == e.r) {
+                  // 记录有列表
+                  hasArray = true;
+                  // 记录列表里面每一项有多少属性
+                  // 就是结束行-开始行 + 1
+                  let arrayObjPropsQtyLeft = e.c - s.c + 1;
+                  // 遍历 属性列表
+                  for (const key in cols) {
+                    // 如果属性的index 等于 开始行, 则表示这是一个列表属性
+                    if (cols[key].index == s.c) {
+                      // 记录列表的属性名称和index
+                      cols[key].props = {};
+                      // 当还有剩余属性没记录时
+                      while (arrayObjPropsQtyLeft > 0) {
+                        arrayObjPropsQtyLeft -= 1;
+                        // 属性位置等于 结束行 - 剩余的属性
+                        let position = e.c - arrayObjPropsQtyLeft;
+                        // csvArray中第1行的 position(属性位置)
+                        // 添加到 属性列表中记录 位置和名称
+                        cols[key].props[csvArray[1][position]] = {
+                          col: position,
+                        };
+                      }
+                    }
+                  }
+                }
+              });
+              // 如果有列表属性
+              if (hasArray) {
+                sheet["!merges"].forEach((merge) => {
+                  let { s, e } = merge;
+                  // 至少从第2行开始
+                  if (s.r > 1) {
+                    // 这一行
+                    let row = {};
+                    // 遍历属性列表
+                    for (const key in cols) {
+                      const props = cols[key].props;
+                      // 如果这个属性有props则表示此属性是列表属性
+                      if (props) {
+                        // 在属性名称下建立一个列表
+                        row[key] = [];
+                        // 计算列表中有多少项
+                        // 等于 结束行 - 开始行 + 1
+                        let ArrayLength = e.r - s.r + 1;
+                        // 当还有项没记录时
+                        while (ArrayLength > 0) {
+                          ArrayLength -= 1;
+                          // 这一项的变量
+                          let arrayObj = {};
+                          // 遍历列表属性的props
+                          for (const k in props) {
+                            // 在这一项中添加相应的键与值
+                            // 这一项[键] = csvArray[结束行 - 剩余多少项][位置]
+                            arrayObj[k] =
+                              csvArray[e.r - ArrayLength][props[k].col];
+                          }
+                          // 推入列表属性的列表 /好绕口...取名实在太难了
+                          row[key].push(arrayObj);
+                        }
+                        // 如果不是列表属性
+                        // 那就表示当前的单元格是合并的
+                      } else {
+                        // 这个属性就等与csvArray[开始列][开始行]
+                        row[key] = csvArray[s.r][s.c];
+                      }
+                    }
+                    // 将此行推入result
+                    result.push(row);
+                  }
+                });
+                // 如果没有列表属性
+              } else {
+                csvArray.forEach((row, index) => {
+                  // 从第1行开始
+                  if (index >= 1) {
+                    let rowData = {};
+                    // 遍历属性列表
+                    for (const key in cols) {
+                      // rowData[键]= csvArray[这一行][属性的行位置]
+                      rowData[key] = csvArray[index][cols[key].index];
+                    }
+                    result.push(rowData);
+                  }
+                });
+              }
+              // 输出以便预览
+              const divEL = document.createElement("div");
+              divEL.classList.add("json");
+              document.body.appendChild(divEL);
+
+              const h2El = document.createElement("h2");
+              h2El.innerText = currentSheet;
+              divEL.appendChild(h2El);
+
+              const preEl = document.createElement("pre");
+              preEl.innerHTML = JSON.stringify(result, null, 2);
+              divEL.appendChild(preEl);
+
+              console.log(result);
+            });
+          };
+          fileReader.readAsBinaryString(selectedFile);
+        }
+      });
+    </script>
+  </body>
+</html>
